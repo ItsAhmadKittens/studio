@@ -36,8 +36,6 @@ function FrameCard({ frame, isSelected, onSelectionChange }: { frame: Frame; isS
   );
 }
 
-const BATCH_SIZE = 5;
-
 // The main translator component that orchestrates the UI and logic
 export default function FigmaTranslator() {
   const [frames, setFrames] = useState<Frame[]>(initialFramesData);
@@ -120,19 +118,16 @@ export default function FigmaTranslator() {
 
         const translations = new Map<string, string>();
         
-        for (let i = 0; i < totalElements; i += BATCH_SIZE) {
-          const batch = textElementsToTranslate.slice(i, i + BATCH_SIZE);
-          await Promise.all(
-            batch.map(async (text) => {
-              const result = await translateText({
-                text: text.content,
-                sourceLanguage,
-                targetLanguage: supportedLanguages.find(l => l.code === targetLanguage)?.name || targetLanguage,
-              });
-              translations.set(text.id, result.translatedText);
-            })
-          );
-          setTranslationProgress(((i + batch.length) / totalElements) * 100);
+        let processedCount = 0;
+        for (const text of textElementsToTranslate) {
+          const result = await translateText({
+            text: text.content,
+            sourceLanguage,
+            targetLanguage: supportedLanguages.find(l => l.code === targetLanguage)?.name || targetLanguage,
+          });
+          translations.set(text.id, result.translatedText);
+          processedCount++;
+          setTranslationProgress((processedCount / totalElements) * 100);
         }
 
         setFrames(prevFrames => 
