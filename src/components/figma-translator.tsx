@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Progress } from "@/components/ui/progress";
 import { Languages, Loader2 } from "lucide-react";
 
 // A card representing a single Figma frame
@@ -35,17 +36,22 @@ function FrameCard({ frame, isSelected, onSelectionChange }: { frame: Frame; isS
   );
 }
 
+const BATCH_SIZE = 5;
+
 // The main translator component that orchestrates the UI and logic
 export default function FigmaTranslator() {
   const [frames, setFrames] = useState<Frame[]>(initialFramesData);
   const [selectedFrameIds, setSelectedFrameIds] = useState<Set<string>>(new Set());
   const [sourceLanguage, setSourceLanguage] = useState("N/A");
   const [targetLanguage, setTargetLanguage] = useState<string>("");
+  const [translationProgress, setTranslationProgress] = useState(0);
   const [isPending, startTransition] = useTransition();
   const { toast } = useToast();
 
   const selectedFrames = useMemo(() => frames.filter(f => selectedFrameIds.has(f.id)), [frames, selectedFrameIds]);
   const textElementCount = useMemo(() => selectedFrames.reduce((acc, frame) => acc + frame.texts.length, 0), [selectedFrames]);
+  
+  const isTranslating = isPending && translationProgress > 0;
 
   useEffect(() => {
     if (selectedFrames.length === 0) {
@@ -98,28 +104,36 @@ export default function FigmaTranslator() {
         return;
     }
 
+    setTranslationProgress(0);
+
     startTransition(async () => {
       try {
+        const textElementsToTranslate: (TextElement & { frameId: string })[] = selectedFrames
+          .flatMap(frame => frame.texts.map(text => ({ ...text, frameId: frame.id })))
+          .filter(text => text.content.trim() !== '');
+
+        const totalElements = textElementsToTranslate.length;
+        if (totalElements === 0) {
+          toast({ title: "Nothing to translate."});
+          return;
+        }
+
         const translations = new Map<string, string>();
-        const textElementsToTranslate: (TextElement & { frameId: string })[] = [];
-
-        selectedFrames.forEach(frame => {
-          frame.texts.forEach(text => {
-            textElementsToTranslate.push({ ...text, frameId: frame.id });
-          });
-        });
-
-        await Promise.all(
-          textElementsToTranslate.map(async (text) => {
-            if (!text.content.trim()) return; // Don't translate empty strings
-            const result = await translateText({
-              text: text.content,
-              sourceLanguage,
-              targetLanguage: supportedLanguages.find(l => l.code === targetLanguage)?.name || targetLanguage,
-            });
-            translations.set(text.id, result.translatedText);
-          })
-        );
+        
+        for (let i = 0; i < totalElements; i += BATCH_SIZE) {
+          const batch = textElementsToTranslate.slice(i, i + BATCH_SIZE);
+          await Promise.all(
+            batch.map(async (text) => {
+              const result = await translateText({
+                text: text.content,
+                sourceLanguage,
+                targetLanguage: supportedLanguages.find(l => l.code === targetLanguage)?.name || targetLanguage,
+              });
+              translations.set(text.id, result.translatedText);
+            })
+          );
+          setTranslationProgress(((i + batch.length) / totalElements) * 100);
+        }
 
         setFrames(prevFrames => 
           prevFrames.map(frame => {
@@ -148,6 +162,8 @@ export default function FigmaTranslator() {
           title: "Translation Failed",
           description: "An error occurred during translation. Please try again.",
         });
+      } finally {
+        setTimeout(() => setTranslationProgress(0), 1000);
       }
     });
   };
@@ -203,10 +219,21 @@ export default function FigmaTranslator() {
                 </SelectContent>
               </Select>
             </div>
+
+            {isTranslating && (
+                <div className="space-y-2 pt-2">
+                    <div className="flex justify-between items-center">
+                        <Label>Translation Progress</Label>
+                        <span className="text-sm font-medium text-primary">{Math.round(translationProgress)}%</span>
+                    </div>
+                    <Progress value={translationProgress} className="w-full h-2" />
+                </div>
+            )}
+
           </CardContent>
           <CardFooter>
             <Button className="w-full bg-accent text-accent-foreground hover:bg-accent/90" onClick={handleTranslate} disabled={isPending || !targetLanguage || selectedFrames.length === 0}>
-              {isPending ? (
+              {isTranslating ? (
                 <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Translating...</>
               ) : (
                 <><Languages className="mr-2 h-4 w-4" /> Translate</>
